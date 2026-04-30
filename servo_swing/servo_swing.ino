@@ -19,7 +19,7 @@ void loop() {
       delay(10);
     }
   }
-  if(i > 180){
+  if(i >= 180){
     for(i = 180; i > 0; i--){
       myservo.write(i);
       delay(10);

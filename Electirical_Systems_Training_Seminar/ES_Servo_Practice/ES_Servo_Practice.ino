@@ -36,8 +36,7 @@ void READ_VR(void){
 }
 
 void Set_Angle(void){
-  //angle = 180-(180.0* VR_value / 1023.0);
-  angle = 180.0*VR_value/1023.0;
+  angle = 180-(180.0* VR_value / 1023.0);
 }
 
 //計算途中もintで処理されるから桁あふれに注意

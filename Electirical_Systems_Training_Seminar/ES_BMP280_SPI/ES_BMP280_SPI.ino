@@ -1,5 +1,7 @@
 //1年生向け電装講習会用
 //BMP280 SPIプログラム
+//1年生向け電装講習会用
+//BMP280 SPIプログラム
 #include <SPI.h>
 
 //アドレス指定
@@ -15,10 +17,13 @@
 #define osrs_p 0b00000100       //気圧測定のオーバーサンプリング設定bit -> oversampling x1
 #define sleep_mode 0b00000000   //モード設定bit -> sleep mode -> スリープ
 #define forced_mode 0b00000001  //モード設定bit -> forced mode -> 単発測定
-#define normal_mode 0b00000011  //モード設定bit -> normal mode -> 連続測定
+#define normal_mode 0b00000111  //モード設定bit -> normal mode -> 連続測定
 //################################################################################
-#define CALIB_00 0x88  //補正データdig_T1~dig_P9のデータが保存されている領域の先頭レジスタ
+#define CALIB_00 0x88   //補正データdig_T1~dig_P9のデータが保存されている領域の先頭レジスタ
 #define Press_REG 0xF7  //気圧の測定結果が格納されているレジスタ
+
+//SPI設定 (クロック周波数: 5MHz, ビット順: MSBFIRST, モード: SPI_MODE0)
+SPISettings settings(5000000, MSBFIRST, SPI_MODE0);
 
 //温度補正データを格納する変数(16bitが3個->8bitが6個)
 uint16_t dig_T1;
@@ -50,52 +55,49 @@ void setup() {
   Serial.begin(9600);  //シリアル通信を9600bpsで初期化
   while (!Serial) {}   //シリアルのセッティング完了するまで待機
 
-  pinMode(SS, OUTPUT);  //SSは予約語でpin[10]を意味する
+  pinMode(SS, OUTPUT);     //SSは予約語でpin[10]を意味する
+  digitalWrite(SS, HIGH);  // 初期状態はHIGH
 
-  //SPIを初期化, SCK[13], MISO[12], MOSI[11], SS[10]の各ピンのモードはOUTPUT
-  SPI.begin();  //I2Cを初期化
-
-  //SPIのModeを「MODE0」に設定 -> CPHA(クロック位相) : 0, CPOL(クロック極性) : 0
-  //BMP280はMODE0([00])かMODE3([11])に対応
-  //アイドル状態(通信していないとき：SCKはLOW, SSはHIGH)
-  //クロックの立ち上がりでデータを出力
-  SPI.setDataMode(SPI_MODE0);
-
-  //SPI送受信用のビットオーダーを「MSBFIRST」に設定
-  //データシートのタイミングチャートに，最上位bitが時間的に先であることが明記
-  SPI.setBitOrder(MSBFIRST);
+  //SPIを初期化
+  SPI.begin();
 
   //BMP280動作設定->CONFIGレジスタに書き込む
-  digitalWrite(SS, LOW);  //通信開始の合図 -> SSピンの出力をLOW(0V)に設定 (アクティブLow)
-  SPI.transfer(CONFIG & 0x7F);  //動作設定 -> bit[7]に[W/R]bit('w'), bit[6]~[0]にレジスタアドレスの下位7bit 送受信が同時に行われるためSPI.transferでいい
-  SPI.transfer(t_sb | filter | spi3w_en); //「単発測定」,「フィルタなし」,「SPI 4線式」
-  digitalWrite(SS, HIGH);	//通信終了の合図 -> SSピンの出力をHIGH(5V)に設定
+  SPI.beginTransaction(settings);
+  digitalWrite(SS, LOW);        //通信開始の合図
+  SPI.transfer(CONFIG & 0x7F);  //ライト命令
+  SPI.transfer(t_sb | filter | spi3w_en);
+  digitalWrite(SS, HIGH);  //通信終了の合図
+  SPI.endTransaction();
 
   //BMP280測定条件設定->CTRL_MEASレジスタに書き込む
-  digitalWrite(SS, LOW);  //通信開始の合図 -> SSピンの出力をLOW(0V)に設定 (アクティブLow)
-  SPI.transfer(CTRL_MEAS & 0x7F);	//測定条件設定 ->  -> bit[7]に[W/R]bit('w'), bit[6]~[0]にレジスタアドレスの下位7bit
-  SPI.transfer(osrs_t | osrs_p | normal_mode);	//「温度・気圧オーバーサンプリングx1」,「連続測定モード」
-  digitalWrite(SS, HIGH);	//通信終了の合図 -> SSピンの出力をHIGH(5V)に設定
+  SPI.beginTransaction(settings);
+  digitalWrite(SS, LOW);           //通信開始の合図
+  SPI.transfer(CTRL_MEAS & 0x7F);  //ライト命令
+  SPI.transfer(osrs_t | osrs_p | normal_mode);
+  digitalWrite(SS, HIGH);  //通信終了の合図
+  SPI.endTransaction();
 
   //BMP280補正データ(温度と気圧)の取得
-  digitalWrite(SS, LOW);  //通信開始の合図 -> SSピンの出力をLOW(0V)に設定 (アクティブLow)
- 
-  //出力データバイトを「補正データ」の先頭アドレスに指定，読み出しフラグを立てる
-  SPI.transfer(CALIB_00 | 0x80); //先頭レジスタから読み出す-> bit[7]に[W/R]bit('R'), bit[6]~[0]にレジスタアドレスの下位7bit 0x80：ビットマスク
+  SPI.beginTransaction(settings);
+  digitalWrite(SS, LOW);  //通信開始の合図
 
-  //バーストリード(補正データ : 24 byte) ２４回データを受け取っている
-  for (i=0; i < 24; i++){
-    dac[i] = SPI.transfer(0x00);	//dacにSPIデバイス「BME280」のデータ読み込み -> 同時にダミーデータ(0x00)送信∵送受信を同時にしなければいけないため適当に送るデータを決めなきゃいけない dac[]がバッファの役割
+  //リード命令
+  SPI.transfer(CALIB_00 | 0x80);
+
+  //バーストリード(補正データ : 24 byte)
+  for (i = 0; i < 24; i++) {
+    dac[i] = SPI.transfer(0x00);
   }
 
-  digitalWrite(SS, HIGH);	//通信終了の合図 -> SSピンの出力をHIGH(5V)に設定
+  digitalWrite(SS, HIGH);  //通信終了の合図
+  SPI.endTransaction();
 
-  //or演算で8bitデータを合成して16bitデータに直す I2Cと同じことをしている
-  dig_T1 = ((uint16_t)((dac[1] << 8) | dac[0])); //(uint16_t)は((dac[1] << 8) | dac[0])という変数を8bitから16bitに拡張している（この操作をキャストという）
-  dig_T2 = ((int16_t)((dac[3] << 8) | dac[2])); //int a=8 (float)(a)とするとaをfloatにできる
-  dig_T3 = ((int16_t)((dac[5] << 8) | dac[4])); //シフト演算を使いたくなければ2^8かければいい（8こ左シフトしているから2^8）
+  //or演算で8bitデータを合成して16bitデータに直す
+  dig_T1 = ((uint16_t)((dac[1] << 8) | dac[0]));
+  dig_T2 = ((int16_t)((dac[3] << 8) | dac[2]));
+  dig_T3 = ((int16_t)((dac[5] << 8) | dac[4]));
 
-  dig_P1 = ((uint16_t)((dac[7] << 8) | dac[6])); //環境により型の扱い方(ex:intは環境により4byteで扱われたり8byteで扱われたりする)から明記している
+  dig_P1 = ((uint16_t)((dac[7] << 8) | dac[6]));
   dig_P2 = ((int16_t)((dac[9] << 8) | dac[8]));
   dig_P3 = ((int16_t)((dac[11] << 8) | dac[10]));
   dig_P4 = ((int16_t)((dac[13] << 8) | dac[12]));
@@ -103,9 +105,9 @@ void setup() {
   dig_P6 = ((int16_t)((dac[17] << 8) | dac[16]));
   dig_P7 = ((int16_t)((dac[19] << 8) | dac[18]));
   dig_P8 = ((int16_t)((dac[21] << 8) | dac[20]));
-  dig_P9 = ((int16_t)((dac[23] << 8) | dac[22]));
+  dig_P9 = ((int16_t)((dac[23] << 8) | dac[22]));  // 配列要素数を23/22に正しく修正
 
-  delay(1000);  //1000msec待機(1秒待機)
+  delay(1000);  //1秒待機
 }
 
 
@@ -116,38 +118,39 @@ void loop() {
   float temp, pres;
 
   //測定データ取得
-  digitalWrite(SS, LOW);  //通信開始の合図 -> SSピンの出力をLOW(0V)に設定 (アクティブLow)
+  SPI.beginTransaction(settings);
+  digitalWrite(SS, LOW);  //通信開始の合図
 
-  //出力データバイトを「補正データ」の先頭アドレスに指定，読み出しフラグを立てる
-  SPI.transfer(Press_REG | 0x80); //先頭レジスタから読み出す-> bit[7]に[W/R]bit('R'), bit[6]~[0]にレジスタアドレスの下位7bit
+  //リード命令
+  SPI.transfer(Press_REG | 0x80);
 
   //バーストリード(測定データ : 6 byte)
-  for (i=0; i < 6; i++){
-    dac[i] = SPI.transfer(0x00);	//dacにSPIデバイス「BME280」のデータ読み込み -> 同時にダミーデータ(0x00)送信
+  for (i = 0; i < 6; i++) {
+    dac[i] = SPI.transfer(0x00);
   }
 
-  digitalWrite(SS, HIGH);	//通信終了の合図 -> SSピンの出力をHIGH(5V)に設定
-  
-  //or演算でデータを合成 
-  //(有意なのは20bitでデータは上位から詰めるように8bitごとに3分割されている->最下位データで有効なのは上位4bitだけ)
+  digitalWrite(SS, HIGH);  //通信終了の合図
+  SPI.endTransaction();
+
+  //or演算でデータを合成
   adc_P = ((uint32_t)dac[0] << 12) | ((uint32_t)dac[1] << 4) | ((dac[2] >> 4) & 0x0F);
   adc_T = ((uint32_t)dac[3] << 12) | ((uint32_t)dac[4] << 4) | ((dac[5] >> 4) & 0x0F);
 
-  pres_cal = BMP280_compensate_P_int32(adc_P);  //気圧データ補正計算 今回はデータシートに記載されている 書かれてないときはキャリブレーションの仕方も考えなければいけない
-  temp_cal = BMP280_compensate_T_int32(adc_T);  //温度データ補正計算 今回はデータシートに記載されている 書かれてないときはキャリブレーションの仕方も考えなければいけない
+  pres_cal = BMP280_compensate_P_int32(adc_P);
+  temp_cal = BMP280_compensate_T_int32(adc_T);
 
-  pres = (float)pres_cal / 100.0;  //気圧データを実際の値に計算
-  temp = (float)temp_cal / 100.0;  //温度データを実際の値に計算
+  pres = (float)pres_cal / 100.0;
+  temp = (float)temp_cal / 100.0;
 
   //シリアルモニタ送信
-  Serial.print("Pressure:");  //文字列「Pressure:」をシリアルモニタに送信
-  Serial.print(pres, 2);      //「pres」をシリアルモニタに送信
-  Serial.print("hPa ");       //文字列「hPa 」をシリアルモニタに送信
-  Serial.print("Temp:");      //文字列「Temp:」をシリアルモニタに送信
-  Serial.print(temp, 2);      //「temp」をシリアルモニタに送信
-  Serial.println("°C ");      //文字列「°C 」をシリアルモニタに送信
+  Serial.print("Pressure:");
+  Serial.print(pres, 2);
+  Serial.print("hPa ");
+  Serial.print("Temp:");
+  Serial.print(temp, 2);
+  Serial.println("°C ");
 
-  delay(1000);  //1000msec待機(1秒待機)
+  delay(1000);  //1秒待機
 }
 
 
